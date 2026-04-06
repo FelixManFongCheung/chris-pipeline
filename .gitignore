@@ -1,0 +1,6 @@
+.env
+secrets/*.json
+__pycache__/
+*.pyc
+.venv/
+*.csv

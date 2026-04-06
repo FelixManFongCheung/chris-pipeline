@@ -1,0 +1,21 @@
+# Production: pull the image built by GitHub Actions (Artifact Registry). No local build. Secrets on the host only.
+#
+#   sudo mkdir -p /etc/chris-pipeline
+#   sudo install -m 600 app.env gsa.json georef.json /etc/chris-pipeline/
+#
+# Authenticate Docker to Artifact Registry (gcloud auth configure-docker REGION-docker.pkg.dev), then:
+#   export CONTAINER_IMAGE=REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY_ID/chris-pipeline:latest
+#   docker compose -f docker-compose.production.yml pull
+#   docker compose -f docker-compose.production.yml up -d
+#
+# See deploy/GCP_ARTIFACT_REGISTRY.md for the image URI and IAM.
+
+services:
+  pipeline:
+    image: ${CONTAINER_IMAGE:?Set CONTAINER_IMAGE e.g. us-central1-docker.pkg.dev/my-project/chris-docker/chris-pipeline:latest}
+    env_file:
+      - /etc/chris-pipeline/app.env
+    volumes:
+      - /etc/chris-pipeline/gsa.json:/run/secrets/gsa.json:ro
+      - /etc/chris-pipeline/georef.json:/run/secrets/georef.json:ro
+    restart: unless-stopped
