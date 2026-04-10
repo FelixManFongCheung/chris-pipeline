@@ -1,6 +1,9 @@
 """
-Run scrape pipeline when the 'contacted' sheet has few enough rows with valid
-emails; otherwise run the email sender. Threshold is CONTACTED_EMAIL_THRESHOLD (default 299).
+Run pipeline based on 'contacted' valid-email count.
+
+- If count <= CONTACTED_EMAIL_THRESHOLD (default 299): run scrape.py, then
+  chris_email.py (only if scrape.py succeeds).
+- If count > threshold: run chris_email.py only.
 """
 
 from __future__ import annotations
@@ -40,13 +43,20 @@ def main() -> None:
     n = count_valid_emails_in_contacted()
     print(
         f"Orchestrator: 'contacted' has {n} valid email(s); "
-        f"threshold is {threshold} (<= threshold → scrape.py, else → chris_email.py)."
+        f"threshold is {threshold} "
+        "(<= threshold → scrape.py then chris_email.py, else → chris_email.py)."
     )
 
     root = Path(__file__).resolve().parent
     if n <= threshold:
         print("→ Running scrape.py (full pipeline from SCRAPE_STEPS / .env)")
-        proc = subprocess.run([sys.executable, str(root / "scrape.py")], cwd=root)
+        scrape_proc = subprocess.run([sys.executable, str(root / "scrape.py")], cwd=root)
+        if scrape_proc.returncode != 0:
+            print(f"✗ scrape.py failed with exit code {scrape_proc.returncode}; skipping chris_email.py")
+            raise SystemExit(scrape_proc.returncode)
+
+        print("→ scrape.py succeeded; running chris_email.py")
+        proc = subprocess.run([sys.executable, str(root / "chris_email.py")], cwd=root)
     else:
         print("→ Running chris_email.py")
         proc = subprocess.run([sys.executable, str(root / "chris_email.py")], cwd=root)
