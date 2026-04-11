@@ -6,3 +6,4 @@ __pycache__
 *.csv
 *.json
 !requirements.txt
+!georef-united-states-of-america-zc-point.json
