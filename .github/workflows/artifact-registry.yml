@@ -19,6 +19,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Verify GeoJSON is present for Docker build
+        run: |
+          test -f georef-united-states-of-america-zc-point.json
+          ls -lh georef-united-states-of-america-zc-point.json
+
       - name: Authenticate to Google Cloud
         id: auth
         uses: google-github-actions/auth@v2
