@@ -30,6 +30,12 @@ from homeharvest import scrape_property
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 
+def _homeharvest_parallel_kw() -> Dict[str, Any]:
+    """HOMEHARVEST_PARALLEL=false (default) turns off parallel pagination in scrape_property."""
+    parallel_raw = os.environ.get("HOMEHARVEST_PARALLEL", "false").strip().lower()
+    return {"parallel": parallel_raw in ("1", "true", "yes")}
+
+
 def clean_zip_code(address: str) -> str:
     if not address:
         return address
@@ -107,7 +113,13 @@ def call_primetracers_property_search(address: str, client_uuid: str=None, verbo
         try:
             if verbose and attempt > 0:
                 print(f'  🔄 Retry attempt {attempt + 1}/{max_retries}')
-            response = requests.post(url, headers=headers, json=payload, cookies=cookies if cookies else None, timeout=30)
+            response = requests.post(
+                url,
+                headers=headers,
+                json=payload,
+                cookies=cookies if cookies else None,
+                timeout=30,
+            )
             if verbose:
                 print(f'  📊 Status: {response.status_code}')
             if response.status_code == 200:
@@ -375,7 +387,21 @@ def enrich_sampled_merged_with_primetracers(sampled_merged: pd.DataFrame, client
     return out
 
 def fetching_listings_from_density(df_json, state_codes=('AZ', 'NV', 'TX', 'CA'), density_threshold=75, out_prefix='final_zips_ordered', shuffle=True, random_state=None):
+    """HomeHarvest → Realtor.com: rate limits apply. See README / HomeHarvest FAQ.
+
+    HOMEHARVEST_DELAY_SECONDS — pause between ZIP requests (default 2).
+    HOMEHARVEST_ZIP_MAX_ATTEMPTS — retries per ZIP (default 3).
+    HOMEHARVEST_RETRY_DELAY_SECONDS — backoff base between attempts (default 5).
+    HOMEHARVEST_PARALLEL — true/false; default false (sequential pagination, gentler).
+    """
+    delay_between_zips = float(os.environ.get("HOMEHARVEST_DELAY_SECONDS", "2"))
+    max_attempts = max(1, int(os.environ.get("HOMEHARVEST_ZIP_MAX_ATTEMPTS", "3")))
+    retry_base = float(os.environ.get("HOMEHARVEST_RETRY_DELAY_SECONDS", "5"))
+    hh_kw = _homeharvest_parallel_kw()
+    print(f"HomeHarvest: parallel pagination = {hh_kw.get('parallel', False)}")
+
     all_results = []
+    request_index = 0
     for st in state_codes:
         df_state = df_json[df_json['stusps_code'] == st].copy()
         df_zips = df_state[df_state['density'] > density_threshold].copy()
@@ -386,8 +412,37 @@ def fetching_listings_from_density(df_json, state_codes=('AZ', 'NV', 'TX', 'CA')
         shuffled_zips = df_zips['zip_code'].sample(frac=0.3, random_state=random_state).reset_index(drop=True)
         print(len(shuffled_zips))
         for zip_code in shuffled_zips:
+            if request_index > 0 and delay_between_zips > 0:
+                time.sleep(delay_between_zips)
+            request_index += 1
+
+            properties = None
+            for attempt in range(max_attempts):
+                try:
+                    properties = scrape_property(
+                        location=str(zip_code),
+                        listing_type='for_sale',
+                        year_built_max=2025,
+                        price_min=400000,
+                        price_max=3000000,
+                        past_days=5,
+                        **hh_kw,
+                    )
+                    break
+                except Exception as e:
+                    if attempt < max_attempts - 1:
+                        wait = retry_base * (2**attempt)
+                        print(
+                            f'  ⚠️ zip {zip_code} attempt {attempt + 1}/{max_attempts} failed: {e}; '
+                            f'retrying in {wait:.1f}s'
+                        )
+                        time.sleep(wait)
+                    else:
+                        print(f'Error fetching properties for zip {zip_code}: {e}')
+
+            if properties is None:
+                continue
             try:
-                properties = scrape_property(location=str(zip_code), listing_type='for_sale', year_built_max=2025, price_min=400000, price_max=3000000, past_days=5)
                 print(len(properties))
                 if len(properties) == 0:
                     continue
@@ -395,7 +450,7 @@ def fetching_listings_from_density(df_json, state_codes=('AZ', 'NV', 'TX', 'CA')
                 properties['source_zip'] = zip_code
                 all_results.append(properties)
             except Exception as e:
-                print(f'Error fetching properties for zip {zip_code}: {e}')
+                print(f'Error processing results for zip {zip_code}: {e}')
                 continue
     if len(all_results) == 0:
         print('No properties found')
@@ -903,6 +958,12 @@ def _print_cli_help() -> None:
 
 Place zoomcasa-scaler-key1-5b442b14e7cd.json in this directory (or set GSHEET_* in .env).
 Set FUB/Copper/Primetracers and paths in .env — see .env.example.
+
+HomeHarvest (Realtor.com) — throttle ZIP fetches:
+  HOMEHARVEST_DELAY_SECONDS=2
+  HOMEHARVEST_ZIP_MAX_ATTEMPTS=3
+  HOMEHARVEST_RETRY_DELAY_SECONDS=5
+  HOMEHARVEST_PARALLEL=false   (set true only if you need speed and are not rate-limited)
 """
     )
 
